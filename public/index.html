@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HyperFrame Auto-Studio - 大纲驱动全自动技术视频生成器</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="glow-bg"></div>
+  <div class="grid-overlay"></div>
+ 
+  <div class="app-container">
+    <!-- 头部全局大标题面板 -->
+    <header class="app-header">
+      <div class="header-logo">
+        <svg class="logo-svg" width="34" height="34" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right: 2px;">
+          <path d="M3 7.5L5.5 2H9L6.5 7.5H3Z" fill="#00f2fe" opacity="0.8"/>
+          <path d="M8.5 7.5L11 2H14.5L12 7.5H8.5Z" fill="#00f2fe" opacity="0.6"/>
+          <path d="M14 7.5L16.5 2H20L17.5 7.5H14Z" fill="#7f00ff" opacity="0.4"/>
+          <path d="M2 8H22V19C22 20.1 21.1 21 20 21H4C2.9 21 2 20.1 2 19V8Z" fill="url(#panel-gradient)" stroke="#00f2fe" stroke-width="1.5"/>
+          <path d="M2 8L22 8" stroke="#00f2fe" stroke-width="1.5"/>
+          <defs>
+            <linearGradient id="panel-gradient" x1="2" y1="8" x2="22" y2="21" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#05060b"/>
+              <stop offset="100%" stop-color="#0a0f1e"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <div class="logo-text">
+          <h1>HyperFrame Auto-Studio</h1>
+          <p>纯大纲驱动的双阶技术视频自动化制作系统</p>
+        </div>
+      </div>
+      <div class="header-status-badge">
+        <span class="status-dot"></span>
+        <span id="status-text">控制后台运行正常</span>
+      </div>
+    </header>
+
+    <main class="app-content">
+      
+      <!-- Left Column: Creation & Settings -->
+      <section class="panel creator-panel">
+        <div class="panel-header">
+          <div class="creator-title-area">
+            <span class="header-icon">🛠️</span>
+            <div>
+              <h2>创作与控制中心</h2>
+              <p class="subtitle">输入您想科普的技术主题，由 AI 自动排版、配音和画图</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-body">
+          <!-- Outline Prompt Area -->
+          <div class="prompt-card">
+            <div class="form-group" style="margin-bottom: 5px;">
+              <label for="ai-model-select">🤖 选择创作大脑模型</label>
+              <select id="ai-model-select" style="background: #03050a;">
+                <!-- 动态加载 -->
+              </select>
+            </div>
+            <h3>💡 视频核心主题 / 技术大纲</h3>
+            <textarea id="prompt-input" rows="12" placeholder="在此输入您想要科普的技术点。例如：
+- 为什么 Docker 比传统虚拟机轻量？
+- 详解 Go 语言的 Goroutine 高并发机制
+- Redis 的单线程模型为什么那么快？"></textarea>
+            
+            <button id="btn-ai-generate" class="btn btn-primary btn-full-width">
+              <span class="icon">✨</span> 1. 智能生成页面大纲
+            </button>
+          </div>
+
+          <!-- Parameter Configuration Center -->
+          <div class="params-section">
+            <h3>⚙️ 参数配置中心</h3>
+            <div class="params-grid">
+              <!-- Channels Config -->
+              <div class="param-card">
+                <h4>🚀 视频号发布设置</h4>
+                <div class="form-group">
+                  <label for="publish-mode">发布模式</label>
+                  <select id="publish-mode">
+                    <option value="draft">保存草稿 (推荐)</option>
+                    <option value="direct">直接发布</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="archive-collection">归档合集</label>
+                  <input type="text" id="archive-collection" placeholder="如: AI架构深度解析">
+                </div>
+              </div>
+
+              <!-- TTS Voice Config -->
+              <div class="param-card">
+                <h4>🎙️ TTS 配音参数</h4>
+                <div class="form-group">
+                  <label for="voice-select">口播音色</label>
+                  <select id="voice-select">
+                    <option value="zh-CN-YunxiNeural">zh-CN-YunxiNeural (推荐)</option>
+                    <option value="zh-CN-XiaoxiaoNeural">zh-CN-XiaoxiaoNeural (女声)</option>
+                    <option value="zh-CN-YunjianNeural">zh-CN-YunjianNeural (播音)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="speed-select">口播语速</label>
+                  <select id="speed-select">
+                    <option value="5">微加速 (1.05x - 推荐)</option>
+                    <option value="10">加速 (1.10x)</option>
+                    <option value="0">正常语速 (1.00x)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Control & Dashboard -->
+      <section class="panel control-panel">
+        <!-- Navigation Tabs -->
+        <div class="tabs-header">
+          <button class="tab-btn active" id="tab-btn-script">📄 页面大纲微调</button>
+          <button class="tab-btn" id="tab-btn-channel">⚙️ 渲染与发布通道</button>
+          <button class="tab-btn" id="tab-btn-player">📺 最终及页面预览</button>
+        </div>
+
+        <div class="panel-body tab-content-container">
+          
+          <!-- TAB CONTENT 1: SCRIPT TWEAKING -->
+          <div class="tab-content" id="tab-content-script">
+            <div class="script-tweak-header">
+              <h3>📝 页面大纲草稿二次微调</h3>
+              <button id="btn-add-scene" class="btn btn-secondary">+ 添加新页面</button>
+            </div>
+            <form id="script-form" class="script-form-list" onsubmit="return false;">
+              <div class="no-data-tip">等待生成页面大纲...</div>
+            </form>
+          </div>
+
+          <!-- TAB CONTENT 2: RENDER & DEPLOY -->
+          <div class="tab-content hidden" id="tab-content-channel">
+            <!-- Smart Resume Checkbox -->
+            <div class="resume-checkbox-wrapper" style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.03); border: 1px dashed rgba(255, 255, 255, 0.08); padding: 10px 14px; border-radius: 8px;">
+              <input type="checkbox" id="enable-resume-cache" style="width: 16px; height: 16px; cursor: pointer; accent-color: #00f2fe;">
+              <label for="enable-resume-cache" style="font-size: 13.5px; color: #a0aec0; cursor: pointer; user-select: none; font-weight: 500;">
+                ⚡ 启用智能断点续作模式 (秒级复用本地已生成的 HTML、音频与视频帧)
+              </label>
+            </div>
+
+            <!-- Execution Buttons Grid -->
+            <div class="execute-buttons-grid">
+              <button id="btn-execute-html" class="btn btn-secondary">
+                ⚡ 仅生成 HTML 并极速预览 (免渲染测试)
+              </button>
+              <button id="btn-execute-all" class="btn btn-execute">
+                🎬 确认大纲并一键出片 (全流程启动)
+              </button>
+            </div>
+
+            <!-- Process Stage Cards -->
+            <div class="stages-card-list">
+              <div class="process-card-item" id="stage-html">
+                <div class="item-left">
+                  <span class="item-icon">🎨</span>
+                  <div>
+                    <div class="item-name">AI 交互网页生成 (LLM)</div>
+                    <div class="item-status-text">未开始</div>
+                  </div>
+                </div>
+                <div class="item-status-dot"></div>
+              </div>
+
+              <div class="process-card-item" id="stage-tts">
+                <div class="item-left">
+                  <span class="item-icon">🎙️</span>
+                  <div>
+                    <div class="item-name">口播语音合成 (TTS)</div>
+                    <div class="item-status-text">未开始</div>
+                  </div>
+                </div>
+                <div class="item-status-dot"></div>
+              </div>
+
+              <div class="process-card-item" id="stage-check">
+                <div class="item-left">
+                  <span class="item-icon">🧪</span>
+                  <div>
+                    <div class="item-name">HyperFrames 源文件编译</div>
+                    <div class="item-status-text">未开始</div>
+                  </div>
+                </div>
+                <div class="item-status-dot"></div>
+              </div>
+
+              <div class="process-card-item" id="stage-render">
+                <div class="item-left">
+                  <span class="item-icon">🎬</span>
+                  <div>
+                    <div class="item-name">无头浏览器视频渲染</div>
+                    <div class="item-status-text">未开始</div>
+                  </div>
+                </div>
+                <div class="item-status-dot"></div>
+              </div>
+
+              <div class="process-card-item" id="stage-upload">
+                <div class="item-left">
+                  <span class="item-icon">🚀</span>
+                  <div>
+                    <div class="item-name">视频号自动发布</div>
+                    <div class="item-status-text">未开始</div>
+                  </div>
+                </div>
+                <div class="item-status-dot"></div>
+              </div>
+            </div>
+
+            <!-- SSE Logger Console -->
+            <div class="sse-console-header">
+              <span class="console-label">📺 系统实时管道日志流 (Server-Sent Events)</span>
+              <button id="btn-clear-logs" class="btn-clear-logs-btn">清除日志</button>
+            </div>
+            <div class="terminal-box">
+              <div class="terminal-body" id="terminal-log-body">
+                <div class="terminal-line system-msg">[系统就绪] 等待工作流启动...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB CONTENT 3: FINAL PLAYER -->
+          <div class="tab-content hidden" id="tab-content-player">
+            <div class="player-container">
+              <h3>🖼️ 交互式 HTML 页面预览 (0延时交互)</h3>
+              <div class="html-preview-wrapper">
+                <iframe id="interactive-html-preview" title="交互式HTML预览" src="about:blank"></iframe>
+              </div>
+
+              <h3 style="margin-top: 20px;">📺 最终合成视频 (MP4 本地播放)</h3>
+              <div class="video-wrapper">
+                <video id="final-video-player" controls>
+                  您的浏览器不支持 HTML5 视频播放。
+                </video>
+              </div>
+              
+              <div class="player-info">
+                <p>您可以在这里预览交互页面或播放最终渲染完毕的视频成片。</p>
+                <p id="player-current-source">当前视频源：尚未挂载</p>
+                <p id="player-interactive-source">当前交互源：尚未挂载</p>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

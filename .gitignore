@@ -1,0 +1,24 @@
+# 1. 阻止依赖包提交
+node_modules/
+
+# 2. 核心密钥（极度危险，绝对忽略）
+.env
+.env.*
+*.env
+
+# 3. 微信登录凭证及浏览器缓存（极度危险，含您的微信 Session，绝对忽略）
+.chrome_session/
+.chrome_session*
+
+# 4. 本地媒体生成与运行工作空间（严防您生成的技术大纲与音视频文件泄漏）
+workspace/
+
+# 5. 各主题大模型手绘生成的专属子目录，防止污染主代码库
+hyperframes-native/*/
+
+# 6. 编辑器与系统配置缓存
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db

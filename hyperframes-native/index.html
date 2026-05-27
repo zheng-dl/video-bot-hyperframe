@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1920, initial-scale=1">
+    <title>Redis · 极客内核 | 技术分镜演示</title>
+    <script id="video-meta" type="application/json">
+        {
+            "title": "Redis 核心机制解剖：从内存到分布式高可用",
+            "description": "10分钟彻底搞懂Redis数据结构、持久化、单线程模型、主从复制与集群。#Redis #技术科普 #后端架构",
+            "tts_voice": "zh-CN-YunxiNeural",
+            "bgm_path": ""
+        }
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 1920px;
+            height: 1080px;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: #05060b;
+            background-image: radial-gradient(circle at 20% 30%, #0f111a 0%, #030408 100%);
+            font-family: "Noto Sans SC", "Inter", sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #root {
+            width: 1920px;
+            height: 1080px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .clip {
+            visibility: hidden;
+            opacity: 0;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 2.5rem;
+            background: transparent;
+            pointer-events: none;
+        }
+
+        .stage {
+            max-width: 1280px;
+            width: 100%;
+            background: rgba(10, 14, 23, 0.7);
+            backdrop-filter: blur(2px);
+            border: 1px solid rgba(50, 100, 229, 0.25);
+            border-radius: 48px;
+            padding: 2.8rem 3rem;
+            box-shadow: 0 30px 60px -20px #000000cc, 0 0 0 1px rgba(36, 147, 237, 0.15) inset;
+            position: relative;
+            min-height: 620px;
+        }
+
+        .scene-content {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        h2 {
+            font-size: 58px;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, #f0f4ff 0%, #b0c4ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 28px;
+            border-left: 6px solid #2496ED;
+            padding-left: 28px;
+            text-shadow: 0 0 8px rgba(36,147,237,0.3);
+        }
+
+        .sub {
+            font-size: 26px;
+            color: #b7c9e2;
+            line-height: 1.5;
+            margin-bottom: 24px;
+            font-weight: 400;
+            letter-spacing: 0.3px;
+        }
+
+        .code-block {
+            background: #0b0e17;
+            border: 1px solid #2a3a5a;
+            border-radius: 24px;
+            padding: 20px 28px;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 20px;
+            color: #d6e6ff;
+            white-space: pre;
+            overflow-x: auto;
+            box-shadow: inset 0 0 0 1px #1e2a44;
+            line-height: 1.6;
+        }
+
+        .grid-2, .grid-3 {
+            display: grid;
+            gap: 28px;
+            margin: 20px 0;
+        }
+        .grid-2 { grid-template-columns: 1fr 1fr; }
+        .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+        .card {
+            background: rgba(18, 26, 40, 0.6);
+            border: 1px solid #2b3d62;
+            border-radius: 28px;
+            padding: 24px 20px;
+            backdrop-filter: blur(4px);
+        }
+
+        .card-title {
+            font-size: 26px;
+            font-weight: 500;
+            color: #7aa9ff;
+            margin-bottom: 16px;
+            border-bottom: 1px dashed #2e4570;
+            padding-bottom: 8px;
+        }
+
+        .card-text {
+            font-size: 24px;
+            color: #ccddf9;
+            line-height: 1.5;
+        }
+
+        .svg-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            margin: 18px 0;
+        }
+
+        svg text {
+            font-family: 'Inter', system-ui, sans-serif;
+        }
+
+        .legend {
+            font-size: 22px;
+            fill: #b0caf0;
+        }
+
+        .label-badge {
+            font-size: 22px;
+            font-weight: 500;
+        }
+
+        .accent-red { color: #DC382C; fill: #DC382C; }
+        .accent-blue { color: #326CE5; fill: #326CE5; }
+        .accent-cyan { color: #2496ED; fill: #2496ED; }
+        .bg-dark-card { background: #0b101c; }
+        
+        .scene-narration {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="218" data-width="1920" data-height="1080">
+        <!-- 场景 1：Redis 是什么 -->
+        <div class="clip" id="s0" data-start="0" data-duration="28.98" data-track-index="0">
+            <div class="stage">
+                <div class="scene-content">
+                    <h2>⚡ Redis · 内存数据库 & 键值存储</h2>
+                    <div class="sub">完全基于内存的远程字典服务 —— 极速读写，单机 QPS 可达 10w+</div>
+                    <div class="svg-container">
+                        <svg width="760" height="240" viewBox="0 0 760 240" xmlns="http://www.w3.org/2000/svg">
+                            <rect x="20" y="20" width="720" height="200" rx="24" fill="#0d1322" stroke="#326CE5" stroke-width="2.5" stroke-dasharray="8 6"/>
+                            <text x="50" y="70" font-size="28" fill="#b0d0ff" font-weight="500">📦 键空间 (Key Space)</text>
+                            <text x="50" y="120" font-size="26" fill="#c0d8ff">• 字符串 / 列表 / 哈希 / 集合 / 有序集合</text>
+                            <text x="50" y="165" font-size="26" fill="#c0d8ff">• 完全基于内存 · 异步持久化</text>
+                            <text x="50" y="210" font-size="26" fill="#7aa9ff">• 平均读写延迟 &lt; 1ms</text>
+                            <text x="530" y="80" font-size="32" fill="#DC382C" font-weight="600">MEMORY</text>
+                            <text x="510" y="140" font-size="28" fill="#2496ED">⚡ 10w+ QPS</text>
+                        </svg>
+                    </div>
+                    <div class="code-block">redis> SET name "redis深度解析"<br>OK<br>redis> GET name<br>"redis深度解析"</div>
+                </div>
+                <script type="application/json" class="scene-narration">"Redis 是一个基于内存的键值存储系统，常被称为数据结构服务器。它将所有数据存放在内存中，因此读写速度极快，单机就能轻松达到十万以上的 QPS。你可以把它想象成一个超级字典，key 是索引，value 可以是字符串、列表、哈希等复杂结构。几乎所有现代后端架构都在用它做缓存、会话存储和分布式组件。"</script>
+            </div>
+        </div>
+
+        <!-- 场景 2：核心数据结构 -->
+        <div class="clip" id="s1" data-start="28.98" data-duration="27.83" data-track-index="1">
+            <div class="stage">
+                <div class="scene-content">
+                    <h2>🧩 五种核心数据结构</h2>
+                    <div class="grid-2">
+                        <div class="card"><div class="card-title">🔴 String</div><div class="card-text">缓存、计数器、分布式锁<br><span class="code-block" style="font-size:20px; padding:12px;">SET key value<br>INCR counter</span></div></div>
+                        <div class="card"><div class="card-title">🟡 List</div><div class="card-text">消息队列、最新列表<br><span class="code-block" style="font-size:20px; padding:12px;">LPUSH queue task<br>BRPOP queue 0</span></div></div>
+                        <div class="card"><div class="card-title">🟢 Set</div><div class="card-text">标签、去重、共同关注<br><span class="code-block" style="font-size:20px; padding:12px;">SADD user:1:tag "tech"<br>SINTER set1 set2</span></div></div>
+                        <div class="card"><div class="card-title">🔵 Hash</div><div class="card-text">对象缓存、属性存储<br><span class="code-block" style="font-size:20px; padding:12px;">HSET user:1 name "alice"<br>HGETALL user:1</span></div></div>
+                    </div>
+                    <div class="sub" style="margin-top:12px;">➕ ZSet (有序集合): 排行榜、延时队列 · <span class="code-block" style="display:inline-block; padding:6px 20px;">ZADD leaderboard 100 "player1"</span></div>
+                </div>
+                <script type="application/json" class="scene-narration">"Redis 提供了五种核心数据结构。String 是最基本的键值，适合计数和缓存。List 是双向链表，可以用作消息队列。Set 是无序集合，支持交集并集。Hash 类似小字典，适合存储对象。ZSet 是有序集合，每个元素带分数，天然适合排行榜和延时队列。每种结构都对应丰富的原子操作。"</script>
+            </div>
+        </div>
+
+        <!-- 场景 3：持久化 RDB + AOF -->
+        <div class="clip" id="s2" data-start="56.81" data-duration="29.72" data-track-index="2">
+            <div class="stage">
+                <div class="scene-content">
+                    <h2>💾 持久化 · RDB 快照 & AOF 日志</h2>
+                    <div class="grid-2">
+                        <div class="card"><div class="card-title">📸 RDB (快照)</div><div class="card-text">全量二进制 + 触发条件 save/bgsave<br>适合备份、灾难恢复</div><div class="code-block" style="font-size:18px; margin-top:12px;">save 900 1<br># 900秒内1次写触发</div></div>
+                        <div class="card"><div class="card-title">📋 AOF (追加日志)</div><div class="card-text">记录每个写命令 · fsync 策略<br>数据更安全，可重放</div><div class="code-block" style="font-size:18px; margin-top:12px;">appendfsync everysec<br># 每秒刷盘</div></div>
+                    </div>
+                    <div class="svg-container">
+                        <svg width="700" height="120" viewBox="0 0 700 120">
+                            <rect x="10" y="10" width="150" height="80" rx="16" fill="#132237" stroke="#2496ED" stroke-width="2"/>
+                            <text x="40" y="60" font-size="24" fill="#b0d0ff">RDB 快照</text>
+                            <text x="180" y="60" font-size="30" fill="#7aa9ff"> ⟶ </text>
+                            <rect x="240" y="10" width="150" height="80" rx="16" fill="#132237" stroke="#DC382C" stroke-width="2"/>
+                            <text x="270" y="60" font-size="24" fill="#f0b0b0">AOF 日志</text>
+                            <text x="410" y="60" font-size="30" fill="#7aa9ff"> ⟶ </text>
+                            <rect x="480" y="10" width="200" height="80" rx="16" fill="#1a1f2e" stroke="#326CE5" stroke-width="2" stroke-dasharray="4"/>
+                            <text x="510" y="60" font-size="24" fill="#b0c4ff">混合持久化</text>
+                        </svg>
+                    </div>
+                    <div class="sub">通常两者同时开启：RDB 做全量备份，AOF 保证秒级数据丢失</div>
+                </div>
+                <script type="application/json" class="scene-narration">"Redis 的持久化有两种方式。RDB 是内存快照，生成紧凑的二进制文件，适合定时备份。AOF 则记录每条写命令，通过追加日志的方式保证更高的数据安全性，通常配置每秒刷盘。Redis 4.0 后支持混合持久化，结合两者优点。想象一下，服务器宕机后，AOF 能帮你重放命令，几乎不丢数据。"</script>
+            </div>
+        </div>
+
+        <!-- 场景 4：单线程 + 多路复用 -->
+        <div class="clip" id="s3" data-start="86.53" data-duration="26.24" data-track-index="3">
+            <div class="stage">
+                <div class="scene-content">
+                    <h2>🧵 单线程模型 · I/O 多路复用</h2>
+                    <div class="sub">Redis 基于 Reactor 模式，主线程循环处理事件</div>
+                    <div class="svg-container">
+                        <svg width="820" height="260" viewBox="0 0 820 260">
+                            <rect x="300" y="60" width="200" height="100" rx="30" fill="#0f1a2b" stroke="#2496ED" stroke-width="3"/>
+                            <text x="360" y="120" font-size="30" fill="#e0f0ff" font-weight="500">Event Loop</text>
+                            <circle cx="100" cy="110" r="30" fill="#1f314a" stroke="#326CE5" stroke-width="2.5"/>
+                            <text x="80" y="120" font-size="22" fill="#aaccff">C1</text>
+                            <circle cx="170" cy="180" r="30" fill="#1f314a" stroke="#326CE5" stroke-width="2.5"/>
+                            <text x="150" y="190" font-size="22" fill="#aaccff">C2</text>
+                            <circle cx="80" cy="210" r="30" fill="#1f314a" stroke="#326CE5" stroke-width="2.5"/>
+                            <text x="60" y="220" font-size="22" fill="#aaccff">C3</text>
+                            <path d="M130 110 L290 100" stroke="#7aa9ff" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+                            <path d="M190 180 L290 120" stroke="#7aa9ff" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+                            <path d="M110 210 L290 140" stroke="#7aa9ff" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+                            <defs><marker id="arrowBlue" markerWidth="10" markerHeight="8" refX="10" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8" fill="#7aa9ff"/></marker></defs>
+                            <text x="150" y="50" font-size="24" fill="#7aa9ff">epoll / kqueue · 复用</text>
+                        </svg>
+                    </div>
+                    <div class="code-block"># 单线程原子性 · 无需锁<br>INCR counter    # 线程安全<br>MULTI / EXEC    # 事务</div>
+                </div>
+                <script type="application/json" class="scene-narration">"Redis 采用单线程模型处理命令，但这不代表它慢。核心在于 I/O 多路复用，通过 epoll 或 kqueue 同时监听大量客户端连接，当某个 socket 可读或可写时才触发回调。单线程避免了锁竞争和上下文切换，所有操作都是原子的，性能反而极高。这也是 Redis 能够达到十万级 QPS 的秘密。"</script>
+            </div>
+        </div>
+
+        <!-- 场景 5：主从复制 + 哨兵 -->
+        <div class="clip" id="s4" data-start="112.77" data-duration="23.68" data-track-index="4">
+            <div class="stage">
+                <div class="scene-content">
+                    <h2>🔄 主从复制 · 哨兵高可用</h2>
+                    <div class="grid-2">
+                        <div class="card"><div class="card-title">📡 主从复制</div><div class="card-text">Master 写入，Slave 异步同步<br>支持级联，读写分离</div></div>
+                        <div class="card"><div class="card-title">🛡️ 哨兵模式</div><div class="card-text">监控 + 自动故障转移<br>客户端通过哨兵发现主节点</div></div>
+                    </div>
+                    <div class="svg-container">
+                        <svg width="800" height="200" viewBox="0 0 800 200">
+                            <rect x="20" y="40" width="160" height="80" rx="20" fill="#1a2a44" stroke="#DC382C" stroke-width="3"/>
+                            <text x="55" y="85" font-size="28" fill="#f0c0c0">MASTER</text>
+                            <text x="200" y="80" font-size="28" fill="#7aa9ff">⟶  REPLICATION ⟶</text>
+                            <rect x="360" y="20" width="140" height="70" rx="16" fill="#152238" stroke="#2496ED" stroke-width="2"/>
+                            <text x="390" y="60" font-size="24" fill="#b0d0ff">SLAVE 1</text>
+                            <rect x="360" y="110" width="140" height="70" rx="16" fill="#152238" stroke="#2496ED" stroke-width="2"/>
+                            <text x="390" y="150" font-size="24" fill="#b0d0ff">SLAVE 2</text>
+                            <text x="560" y="80" font-size="28" fill="#ffb347">SENTINEL</text>
+                            <text x="550" y="130" font-size="22" fill="#ffb347">故障转移 · 监控</text>
+                        </svg>
+                    </div>
+                </div>
+                <script type="application/json" class="scene-narration">"主从复制是 Redis 高可用的基础。主节点负责写，从节点同步数据并提供读能力，实现读写分离。当主节点挂掉，哨兵系统会自动选举一个新的主节点，对客户端透明。哨兵不仅监控心跳，还负责通知和配置切换，保证整个集群 7x24 小时可用。"</script>
+            </div>
+        </div>
+
+        <!-- 场景 6：集群分片 -->
+        <div class="clip" id="s5" data-start="136.45" data-duration="25.4" data-track-index="5">
+            <div class="stage">
+                <div class="scene-content">
+                    <h2>🧩 集群分片 · 水平扩展</h2>
+                    <div class="sub">16384 个哈希槽 · 无中心架构</div>
+                    <div class="svg-container">
+                        <svg width="840" height="220" viewBox="0 0 840 220">
+                            <rect x="10" y="40" width="180" height="100" rx="20" fill="#0f1e30" stroke="#326CE5" stroke-width="2.5"/>
+                            <text x="40" y="80" font-size="28" fill="#b0d0ff">Node A</text>
+                            <text x="40" y="115" font-size="22" fill="#7aa9ff">槽 0~5500</text>
+                            <rect x="230" y="40" width="180" height="100" rx="20" fill="#0f1e30" stroke="#2496ED" stroke-width="2.5"/>
+                            <text x="260" y="80" font-size="28" fill="#b0d0ff">Node B</text>
+                            <text x="260" y="115" font-size="22" fill="#7aa9ff">槽 5501~11000</text>
+                            <rect x="450" y="40" width="180" height="100" rx="20" fill="#0f1e30" stroke="#DC382C" stroke-width="2.5"/>
+                            <text x="480" y="80" font-size="28" fill="#f0c0c0">Node C</text>
+                            <text x="480" y="115" font-size="22" fill="#7aa9ff">槽 11001~16383</text>
+                            <text x="680" y="90" font-size="28" fill="#ffb347">Gossip 协议</text>
+                        </svg>
+                    </div>
+                    <div class="code-block">CLUSTER ADDSLOTS 0 5500<br>CLUSTER REPLICATE node-id</div>
+                </div>
+                <script type="application/json" class="scene-narration">"Redis 集群通过分片实现水平扩展。整个键空间被划分为 16384 个哈希槽，每个节点负责一部分槽。客户端或代理根据 key 的 CRC16 结果决定请求哪个节点。节点之间使用 Gossip 协议通信，去中心化设计，增加节点只需迁移槽位，在线扩展成为可能。"</script>
+            </div>
+        </div>
+
+        <!-- 场景 7：应用场景 -->
+        <div class="clip" id="s6" data-start="161.85" data-duration="24.8" data-track-index="6">
+            <div class="stage">
+                <div class="scene-content">
+                    <h2>🚀 经典应用场景</h2>
+                    <div class="grid-3">
+                        <div class="card"><div class="card-title">📦 缓存</div><div class="card-text">热点数据加速<br>TTL + LRU 淘汰</div></div>
+                        <div class="card"><div class="card-title">📨 消息队列</div><div class="card-text">List / PubSub<br>Stream 消费组</div></div>
+                        <div class="card"><div class="card-title">🔒 分布式锁</div><div class="card-text">SET NX + Lua<br>Redlock 算法</div></div>
+                    </div>
+                    <div class="code-block" style="margin-top:20px;">SET lock:resource1 uuid NX EX 10   # 分布式锁<br>LPUSH task:queue "job1"              # 队列</div>
+                </div>
+                <script type="application/json" class="scene-narration">"Redis 的应用场景极其丰富。作为缓存，它可以把数据库查询结果暂存，极大降低延迟。List 和 Stream 结构可以充当消息队列，支持生产者消费者模式。而分布式锁则利用 SET NX 原子指令，结合 Lua 脚本保证复杂操作的原子性，是微服务架构下的必备工具。"</script>
+            </div>
+        </div>
+
+        <!-- 场景 8：性能对比与注意事项 -->
+        <div class="clip" id="s7" data-start="186.65" data-duration="29.44" data-track-index="7">
+            <div class="stage">
+                <div class="scene-content">
+                    <h2>📊 性能对比 & 避坑指南</h2>
+                    <div class="grid-2">
+                        <div class="card"><div class="card-title">⚡ 基准性能</div><div class="card-text">Redis 单机 ~100k QPS<br>Memcached ~80k QPS<br>MySQL ~5k QPS</div></div>
+                        <div class="card"><div class="card-title">⚠️ 注意事项</div><div class="card-text">• 大 key 阻塞 (big key)<br>• 慢查询日志<br>• 内存上限 + 淘汰策略<br>• 避免频繁全量键扫描</div></div>
+                    </div>
+                    <div class="sub" style="margin-top:16px;">📌 建议：监控 latency, 使用 scan 替代 keys, 合理设置 maxmemory</div>
+                </div>
+                <script type="application/json" class="scene-narration">"最后我们来对比性能。Redis 单机轻松达到 10 万 QPS，比传统数据库快两个数量级。但使用中要注意：避免存储过大的 key 导致阻塞，开启慢查询日志定位耗时命令，设置 maxmemory 和淘汰策略防止内存溢出。生产环境建议使用 SCAN 代替 KEYS，并监控延迟指标。合理使用 Redis，能让你的系统性能飞跃。"</script>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <script>
+        var tl = gsap.timeline({ paused: true });
+
+        // 场景 0: 0.00 - 28.98
+        tl.set('#s0', { visibility: 'visible', opacity: 1 }, 0);
+        tl.from('#s0 .stage', { opacity: 0, y: 40, duration: 0.6, ease: 'power2.out' }, 0.1);
+        tl.to('#s0', { opacity: 0, duration: 0.4, ease: 'power2.in' }, 28.48);
+        tl.set('#s0', { visibility: 'hidden' }, 28.98);
+
+        // 场景 1: 28.98 - 56.81
+        tl.set('#s1', { visibility: 'visible', opacity: 1 }, 28.98);
+        tl.from('#s1 .stage', { opacity: 0, y: 40, duration: 0.6, ease: 'power2.out' }, 29.08);
+        tl.to('#s1', { opacity: 0, duration: 0.4, ease: 'power2.in' }, 56.31);
+        tl.set('#s1', { visibility: 'hidden' }, 56.81);
+
+        // 场景 2: 56.81 - 86.53
+        tl.set('#s2', { visibility: 'visible', opacity: 1 }, 56.81);
+        tl.from('#s2 .stage', { opacity: 0, y: 40, duration: 0.6, ease: 'power2.out' }, 56.91);
+        tl.to('#s2', { opacity: 0, duration: 0.4, ease: 'power2.in' }, 86.03);
+        tl.set('#s2', { visibility: 'hidden' }, 86.53);
+
+        // 场景 3: 86.53 - 112.77
+        tl.set('#s3', { visibility: 'visible', opacity: 1 }, 86.53);
+        tl.from('#s3 .stage', { opacity: 0, y: 40, duration: 0.6, ease: 'power2.out' }, 86.63);
+        tl.to('#s3', { opacity: 0, duration: 0.4, ease: 'power2.in' }, 112.27);
+        tl.set('#s3', { visibility: 'hidden' }, 112.77);
+
+        // 场景 4: 112.77 - 136.45
+        tl.set('#s4', { visibility: 'visible', opacity: 1 }, 112.77);
+        tl.from('#s4 .stage', { opacity: 0, y: 40, duration: 0.6, ease: 'power2.out' }, 112.87);
+        tl.to('#s4', { opacity: 0, duration: 0.4, ease: 'power2.in' }, 135.95);
+        tl.set('#s4', { visibility: 'hidden' }, 136.45);
+
+        // 场景 5: 136.45 - 161.85
+        tl.set('#s5', { visibility: 'visible', opacity: 1 }, 136.45);
+        tl.from('#s5 .stage', { opacity: 0, y: 40, duration: 0.6, ease: 'power2.out' }, 136.55);
+        tl.to('#s5', { opacity: 0, duration: 0.4, ease: 'power2.in' }, 161.35);
+        tl.set('#s5', { visibility: 'hidden' }, 161.85);
+
+        // 场景 6: 161.85 - 186.65
+        tl.set('#s6', { visibility: 'visible', opacity: 1 }, 161.85);
+        tl.from('#s6 .stage', { opacity: 0, y: 40, duration: 0.6, ease: 'power2.out' }, 161.95);
+        tl.to('#s6', { opacity: 0, duration: 0.4, ease: 'power2.in' }, 186.15);
+        tl.set('#s6', { visibility: 'hidden' }, 186.65);
+
+        // 场景 7: 186.65 - 216.09 (总时长218s)
+        tl.set('#s7', { visibility: 'visible', opacity: 1 }, 186.65);
+        tl.from('#s7 .stage', { opacity: 0, y: 40, duration: 0.6, ease: 'power2.out' }, 186.75);
+        tl.to('#s7', { opacity: 0, duration: 0.4, ease: 'power2.in' }, 215.59);
+        tl.set('#s7', { visibility: 'hidden' }, 216.09);
+
+        // 挂载 timeline
+        window.__timelines = window.__timelines || {};
+        window.__timelines["main"] = tl;
+
+        // 浏览器预览模式脚本注入
+        if (!window.__hyperframes) {
+            window.__hyperframes = true;
+            function fitToViewport() {
+                var scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080, 1);
+                document.body.style.transform = 'scale(' + scale + ')';
+                document.body.style.transformOrigin = 'top left';
+                var offsetX = (window.innerWidth - 1920 * scale) / 2;
+                var offsetY = (window.innerHeight - 1080 * scale) / 2;
+                document.body.style.marginLeft = Math.max(0, offsetX) + 'px';
+                document.body.style.marginTop = Math.max(0, offsetY) + 'px';
+            }
+            fitToViewport();
+            window.addEventListener('resize', fitToViewport);
+            document.addEventListener('click', function() {
+                if (tl.progress() >= 1) tl.restart(); else tl.play();
+            });
+            document.addEventListener('keydown', function(e) {
+                if (e.key === ' ') {
+                    e.preventDefault();
+                    if (tl.isActive()) tl.pause();
+                    else if (tl.progress() >= 1) tl.restart();
+                    else tl.play();
+                }
+            });
+        }
+    </script>
+</body>
+</html>
