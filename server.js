@@ -105,6 +105,19 @@ app.post("/api/generate-outline", async (req, res) => {
   try {
     console.log(`[Server] Requesting outline for: ${topic} (Provider: ${provider || 'default'})`);
     const outlines = await generateOutline(topic.trim(), provider);
+
+    // 零魔法值与零硬编码，动态创建并保存大纲到本地缓存，供前端秒级初始化还原
+    const workspaceDir = path.resolve("./workspace");
+    if (!fs.existsSync(workspaceDir)) {
+      fs.mkdirSync(workspaceDir, { recursive: true });
+    }
+    const outlinesJsonPath = path.join(workspaceDir, "current_outlines.json");
+    fs.writeFileSync(
+      outlinesJsonPath,
+      JSON.stringify({ topic: topic.trim(), outlines }, null, 2),
+      "utf-8"
+    );
+
     res.json({ outlines });
   } catch (err) {
     console.error(`[Server ERR] Failed to generate outline:`, err.message);

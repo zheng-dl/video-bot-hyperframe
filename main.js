@@ -236,13 +236,16 @@ async function main() {
       PLAYWRIGHT_USER_DATA_DIR: './.chrome_session'
     };
 
-    await uploader.upload({
-      videoPath: finalVideoPath,
-      title: title,
-      description: description,
-      publish_mode: publishMode,
-      collection_name: collectionName
-    }, systemConfig);
+    await uploader.upload(
+      finalVideoPath,
+      {
+        title: title,
+        description: description,
+        publish_mode: publishMode,
+        collection_name: collectionName
+      },
+      systemConfig
+    );
     console.log(`[Main] 发布成功！请前往视频号草稿箱查看。`);
 
     console.log(`\n==========================================`);

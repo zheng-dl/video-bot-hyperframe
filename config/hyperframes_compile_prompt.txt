@@ -25,53 +25,87 @@
      在 endTime 节点执行硬关闭：.set('#sX', { visibility: 'hidden' }, endTime)
      这可以保证 opacity: 0 的视觉淡出，和 visibility: hidden 的硬关闭（防止 seek 时残留）。
 
-5. GSAP Timeline 声明：
-   - 使用 var tl = gsap.timeline({ paused: true }); 必须处于 paused: true 暂停状态。
-   
-6. 对象格式挂载注册（致命硬性要求）：
-   - 必须用如下代码在脚本末尾将 timeline 挂载到 window：
-     window.__timelines = window.__timelines || {};
-     window.__timelines["main"] = tl;
-     * 警告：严禁使用数组格式 (如 window.__timelines = [tl])，这会导致 missing_timeline_registry 错误直接引发渲染卡死！key（如 "main"）必须与 data-composition-id 严格一致。
+5. GSAP Timeline 与时间轴对齐硬性要求（全自动匹配，严禁大模型手写参数）：
+   - 大模型在重构 HTML 时，**绝对禁止手写 GSAP 动画计算代码，也绝对不要写死任何时间点！**
+   - 所有的场景切换、显隐、淡入淡出以及子元素错落入场，必须完全依赖我们提供的通用闭包脚本自动解析。
+   - 大模型唯一要做的是：在生成的 HTML 底部（紧贴着 </body> 之前），**原封不动、一字不差地直接注入以下【全自动时间轴反射匹配引擎】脚本**（不得做任何修改）：
 
-7. 确定性原则：
+<script>
+(function () {
+  // 1. 自动重置所有 .clip 场景的位置和透明度
+  gsap.set('#root > .clip', { display: 'none', opacity: 0 });
+
+  // 2. 初始化暂停的 GSAP Timeline
+  var tl = gsap.timeline({ paused: true });
+
+  // 3. 遍历所有直接子场景 .clip 并全自动匹配时间轴与错落动效
+  var clips = document.querySelectorAll('#root > .clip');
+  clips.forEach(function (clip) {
+    var startTime = parseFloat(clip.getAttribute('data-start'));
+    var duration = parseFloat(clip.getAttribute('data-duration'));
+    var endTime = startTime + duration;
+    var id = '#' + clip.id;
+
+    // A. 画面显隐全自动精确对齐口播时间轴（淡入 + 提前淡出 + 物理隐藏防残留）
+    tl.set(id, { display: 'flex', opacity: 0, visibility: 'visible' }, startTime)
+      .to(id, { opacity: 1, duration: 0.4 }, startTime)
+      .to(id, { opacity: 0, duration: 0.35, ease: 'power2.in' }, endTime - 0.35)
+      .set(id, { display: 'none', visibility: 'hidden' }, endTime);
+
+    // B. 子元素（标题、卡片、代码、SVG 模块）自动 Staggered 错落淡入
+    var animItems = clip.querySelectorAll('h1, h2, h3, p, .card, code, li, .diagram-box, .nest-system');
+    if (animItems.length > 0) {
+      tl.from(animItems, {
+        opacity: 0,
+        y: 35,
+        stagger: 0.12,
+        duration: 0.7,
+        ease: 'power2.out'
+      }, startTime + 0.15);
+    }
+  });
+
+  // 4. 对象格式挂载注册（致命硬性要求，秒级兼容渲染器）
+  window.__timelines = window.__timelines || {};
+  window.__timelines["main"] = tl;
+
+  // 5. 浏览器本地预览自适应缩放与空格暂停播放逻辑
+  if (!window.__hyperframes) {
+    function fitToViewport() {
+      var scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080, 1);
+      document.body.style.transform = 'scale(' + scale + ')';
+      document.body.style.transformOrigin = 'top left';
+      var offsetX = (window.innerWidth - 1920 * scale) / 2;
+      var offsetY = (window.innerHeight - 1080 * scale) / 2;
+      document.body.style.marginLeft = Math.max(0, offsetX) + 'px';
+      document.body.style.marginTop = Math.max(0, offsetY) + 'px';
+    }
+    fitToViewport();
+    window.addEventListener('resize', fitToViewport);
+    document.addEventListener('click', function() {
+      if (tl.progress() >= 1) tl.restart(); else tl.play();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (tl.isActive()) tl.pause();
+        else if (tl.progress() >= 1) tl.restart();
+        else tl.play();
+      }
+    });
+  }
+})();
+</script>
+
+6. 确定性原则：
    - 严禁使用 Math.random() 或 Date.now() 等非确定性数据，全部替换为预设值或确定性计算。
    - 严禁使用 repeat: -1 进行无限循环动画（渲染器将无法寻帧至终点），所有脉冲/闪烁动效必须设为有限的 repeat 周期，并搭配 yoyo: true。
    - 严禁使用 setInterval 或 setTimeout，所有动画时间轴驱动必须彻底交由 GSAP Timeline 接管。
 
-8. 常见 Bug 防御与防抖：
+7. 常见 Bug 防御与防抖：
    - **动画防抖**：在 HyperFrames 源文件中，**严禁使用任何 CSS transition，所有动画效果必须完全由 GSAP Timeline 承载！** 否则 CSS 过渡会与 GSAP seek 时刻发生严重的物理冲突和抖动！
    - **字幕居中定位**：字幕或卡片如需水平居中，**必须使用 CSS 的 transform: translateX(-50%) 进行偏移！严禁在 GSAP 动画中使用 xPercent: -50**，这会导致 headless 渲染时出现字幕严重偏右或偏移不在中间的 Bug。
    - 元素超出视口：多内容场景加 overflow-y: auto 或适当压缩 gap 间距，代码块必须使用 white-space: pre 保证等宽缩进。
-
-9. 浏览器预览模式脚本注入：
-   在 timeline script 结尾必须注入自适应缩放与空格播放逻辑，使用 IIFE 结构：
-   ```javascript
-   if (!window.__hyperframes) {
-     function fitToViewport() {
-       var scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080, 1);
-       document.body.style.transform = 'scale(' + scale + ')';
-       document.body.style.transformOrigin = 'top left';
-       var offsetX = (window.innerWidth - 1920 * scale) / 2;
-       var offsetY = (window.innerHeight - 1080 * scale) / 2;
-       document.body.style.marginLeft = Math.max(0, offsetX) + 'px';
-       document.body.style.marginTop = Math.max(0, offsetY) + 'px';
-     }
-     fitToViewport();
-     window.addEventListener('resize', fitToViewport);
-     document.addEventListener('click', function() {
-       if (tl.progress() >= 1) tl.restart(); else tl.play();
-     });
-     document.addEventListener('keydown', function(e) {
-       if (e.key === ' ') {
-         e.preventDefault();
-         if (tl.isActive()) tl.pause();
-         else if (tl.progress() >= 1) tl.restart();
-         else tl.play();
-       }
-     });
-   }
-   ```
 
 【输出约束】
 直接输出完整规范的 HTML 代码，严禁使用 markdown 代码块 (```html) 包裹返回。
