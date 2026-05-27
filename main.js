@@ -169,11 +169,48 @@ async function main() {
     } else {
       console.log(`\n--- 步骤 4: 渲染无声视频 ---`);
       const renderedVideo = await renderHyperFrames(topicHfDir);
+      
+      // 1. 如果返回的是正常的物理路径字符串，直接复制并应用，规避魔法值
       if (typeof renderedVideo === 'string' && fs.existsSync(renderedVideo)) {
         fs.copyFileSync(renderedVideo, cachedSilentVideoPath);
+        silentVideoPath = cachedSilentVideoPath;
         console.log(`[Main] 无声视频已成功转移到工作空间: ${cachedSilentVideoPath}`);
       } else {
-        silentVideoPath = renderedVideo;
+        // 2. 双重兼容兜底：如果返回了 true，尝试遍历 renders 目录与根目录自动捕获刚生成的文件
+        const searchDirs = [
+          path.join(topicHfDir, 'renders'),
+          topicHfDir
+        ];
+        let foundPath = null;
+        let maxMtime = 0;
+        for (const dir of searchDirs) {
+          if (fs.existsSync(dir)) {
+            const files = fs.readdirSync(dir);
+            for (const file of files) {
+              if (file.toLowerCase().endsWith('.mp4')) {
+                const fullPath = path.join(dir, file);
+                try {
+                  const stat = fs.statSync(fullPath);
+                  if (stat.isFile() && stat.mtimeMs > maxMtime) {
+                    maxMtime = stat.mtimeMs;
+                    foundPath = fullPath;
+                  }
+                } catch (e) {
+                  // 忽略异常
+                }
+              }
+            }
+          }
+        }
+        
+        if (foundPath) {
+          fs.copyFileSync(foundPath, cachedSilentVideoPath);
+          silentVideoPath = cachedSilentVideoPath;
+          console.log(`[Main] 兜底扫描并转移了最新视频分镜: ${cachedSilentVideoPath}`);
+        } else {
+          // 3. 实在找不到，直接抛出业务异常，杜绝将布尔值传给 ffmpeg
+          throw new Error(`[Main ERR] 无法找到渲染出的无声视频文件。请检查 hyperframes 渲染结果。`);
+        }
       }
       console.log(`[Main] 视频帧渲染完毕: ${silentVideoPath}`);
     }
