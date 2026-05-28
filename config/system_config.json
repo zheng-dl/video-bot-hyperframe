@@ -3,6 +3,23 @@
   "DEFAULT_TTS_RATE": "+5%",
   "WEB_PORT": 3001,
   "STATIC_DIR": "./public",
+  "ACTIVE_VIDEO_LAYOUT": "mobile_portrait",
+  "VIDEO_LAYOUTS": {
+    "mobile_portrait": {
+      "stage_width": 1080,
+      "stage_height": 1920,
+      "aspect_ratio": "9:16",
+      "stage_selector": "#video-stage",
+      "preview_shell_selector": ".preview-shell",
+      "allow_responsive_shell": true,
+      "allow_internal_reflow": false,
+      "safe_padding_x": 72,
+      "safe_padding_y": 96,
+      "title_font_size": 72,
+      "body_font_size": 30,
+      "code_font_size": 24
+    }
+  },
   "ACTIVE_LLM_PROVIDER": "deepseek",
   "LLM_PROVIDERS": {
     "gemini": {
@@ -19,9 +36,9 @@
     },
     "gpt": {
       "name": "🧠 OpenAI GPT (深度推理)",
-      "model": "gpt-4o-mini",
+      "model": "gpt-5.4",
       "api_key": "YOUR_GPT_API_KEY_HERE",
-      "api_url": "https://api.openai.com"
+      "api_url": "http://localhost:55774/v1"
     }
   }
 }

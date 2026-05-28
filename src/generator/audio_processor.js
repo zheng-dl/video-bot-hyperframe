@@ -5,6 +5,7 @@ import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
 import ffprobeStatic from 'ffprobe-static';
+import { normalizeTtsRate } from '../utils/video_generation_policy.js';
 
 // Set paths for fluent-ffmpeg
 ffmpeg.setFfmpegPath(ffmpegStatic);
@@ -36,7 +37,7 @@ function concatAudio(inputFiles, outputFile) {
   });
 }
 
-export async function processAudio(htmlPath, topicWorkspace = 'workspace') {
+export async function processAudio(htmlPath, topicWorkspace = 'workspace', speed = '0') {
   console.log(`[Audio Processor] Parsing HTML to extract narrations...`);
   const htmlContent = fs.readFileSync(htmlPath, 'utf-8');
   const $ = cheerio.load(htmlContent);
@@ -53,23 +54,45 @@ export async function processAudio(htmlPath, topicWorkspace = 'workspace') {
   }
   
   const voice = videoMeta.tts_voice || 'zh-CN-YunxiNeural';
+  const ttsRate = normalizeTtsRate(speed);
   console.log(`[Audio Processor] Using TTS Voice: ${voice}`);
+  console.log(`[Audio Processor] Using TTS Rate: ${ttsRate}x`);
 
   // Extract narrations
   const narrations = [];
-  $('.scene').each((index, el) => {
-    const scriptTag = $(el).find('script.scene-narration').html();
-    let text = "";
-    if (scriptTag) {
-      try {
-        text = JSON.parse(scriptTag); // Parses the "string"
-      } catch(e) {
-        text = scriptTag.replace(/^"|"$/g, '').trim(); // Fallback
-      }
-    }
-    narrations.push(text);
-  });
+  const narrationScripts = $('script.scene-narration');
   
+  if (narrationScripts.length > 0) {
+    console.log(`[Audio Processor] Extracting narrations via script tags.`);
+    narrationScripts.each((index, el) => {
+      const scriptTag = $(el).html();
+      let text = "";
+      if (scriptTag) {
+        try {
+          text = JSON.parse(scriptTag); // Parses the "string"
+        } catch(e) {
+          text = scriptTag.replace(/^"|"$/g, '').trim(); // Fallback
+        }
+      }
+      narrations.push(text);
+    });
+  } else {
+    console.log(`[Audio Processor] Falling back to class name query for narrations.`);
+    // 兼容极为罕见的大模型未注入口播脚本、只写了场景类名的异常情况
+    const scenes = $('.scene, .page, .clip');
+    scenes.each((index, el) => {
+      const scriptTag = $(el).find('script.scene-narration').html();
+      let text = "";
+      if (scriptTag) {
+        try {
+          text = JSON.parse(scriptTag);
+        } catch(e) {
+          text = scriptTag.replace(/^"|"$/g, '').trim();
+        }
+      }
+      narrations.push(text);
+    });
+  }
   console.log(`[Audio Processor] Found ${narrations.length} scenes.`);
 
   const tts = new MsEdgeTTS();
@@ -86,8 +109,8 @@ export async function processAudio(htmlPath, topicWorkspace = 'workspace') {
     const outPath = path.join(ttsDir, `scene_${i}.mp3`);
     
     if (text && text.length > 0) {
-      console.log(`[Audio Processor] Generating TTS for scene ${i}...`);
-      const { audioStream } = tts.toStream(text);
+      console.log(`[Audio Processor] Generating TTS for scene ${i}，旁白长度 ${text.length} 字...`);
+      const { audioStream } = tts.toStream(text, { rate: ttsRate });
       const writeStream = fs.createWriteStream(outPath);
       
       await new Promise((resolve, reject) => {
@@ -120,6 +143,8 @@ export async function processAudio(htmlPath, topicWorkspace = 'workspace') {
   return {
     durations,
     masterAudioPath,
-    meta: videoMeta
+    meta: videoMeta,
+    tts_speed: String(speed),
+    tts_rate: ttsRate
   };
 }

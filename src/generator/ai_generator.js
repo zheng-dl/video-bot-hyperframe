@@ -1,17 +1,13 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import fs from 'fs';
 import path from 'path';
+import { getVideoLayoutConfig, readSystemConfig } from '../utils/system_config.js';
 
 /**
  * 动态加载并应用 .env 覆盖后的 LLM 密钥与配置，杜绝魔法值与硬编码
  */
 function getProviderConfig(provider = 'gemini') {
-  const configPath = path.resolve('./config/system_config.json');
-  if (!fs.existsSync(configPath)) {
-    throw new Error(`Missing system config file at: ${configPath}`);
-  }
-
-  const systemConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  const systemConfig = readSystemConfig();
   const config = systemConfig.LLM_PROVIDERS[provider];
   if (!config) {
     throw new Error(`Unsupported LLM provider: ${provider}`);
@@ -42,6 +38,124 @@ function getProviderConfig(provider = 'gemini') {
     api_url: config.api_url,
     api_key: apiKey
   };
+}
+
+/**
+ * 清理模型自带的预览缩放脚本与旧运行时，避免和统一注入的预览逻辑互相打架
+ */
+export function stripPreviewRuntimeConflicts(htmlContent) {
+  let normalizedHtml = htmlContent
+    .replace(/<style id="hf-preview-runtime-style">[\s\S]*?<\/style>\s*/gi, '')
+    .replace(/<script id="hf-preview-runtime-script">[\s\S]*?<\/script>\s*/gi, '')
+    .replace(/<!--\s*(?:响应式缩放脚本|小巧的缩放 JS|小巧的缩放脚本|预览缩放脚本)[\s\S]*?-->\s*/gi, '');
+
+  const previewScaleScriptPattern = /<script>\s*[\s\S]*?(?:const shell = document\.getElementById\(['"]previewShell['"]\)|const shell = document\.querySelector\(['"]\.preview-shell['"]\)|function fitShell\(|const BASE_W\s*=\s*\d+\s*,\s*BASE_H\s*=\s*\d+|window\.addEventListener\(['"]resize['"]\s*,\s*fitShell|stage\.style\.transform\s*=\s*`translateX\(-50%\) scale\(\$\{scale\}\)`)[\s\S]*?<\/script>\s*/gi;
+
+  normalizedHtml = normalizedHtml.replace(previewScaleScriptPattern, '');
+  return normalizedHtml;
+}
+
+/**
+ * 为交互式 HTML 注入稳定的预览缩放运行时，避免固定舞台在窄窗口和 iframe 中被裁切不可见
+ */
+function injectPreviewRuntime(htmlContent, videoLayout) {
+  if (!htmlContent.includes('class="preview-shell"') || !htmlContent.includes('id="video-stage"')) {
+    console.log('[AI Generator] 未检测到 preview-shell / video-stage，跳过预览缩放运行时注入。');
+    return htmlContent;
+  }
+
+  const previewRuntimeStyle = `
+<style id="hf-preview-runtime-style">
+  html, body {
+    width: 100%;
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  body {
+    margin: 0;
+    display: flex !important;
+    flex-direction: column;
+    align-items: center !important;
+    justify-content: flex-start !important;
+  }
+  .preview-shell {
+    position: relative !important;
+    display: block !important;
+    width: ${videoLayout.stage_width}px;
+    height: ${videoLayout.stage_height}px;
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 24px auto !important;
+    flex: 0 0 auto;
+    transform: none !important;
+  }
+  #video-stage {
+    position: absolute !important;
+    top: 0;
+    left: 0;
+    width: ${videoLayout.stage_width}px;
+    height: ${videoLayout.stage_height}px;
+    transform-origin: top left !important;
+  }
+</style>
+`.trim();
+
+  const previewRuntimeScript = `
+<script id="hf-preview-runtime-script">
+(function () {
+  const shell = document.querySelector('.preview-shell');
+  const stage = document.querySelector('#video-stage');
+  if (!shell || !stage) return;
+
+  const stageWidth = ${videoLayout.stage_width};
+  const stageHeight = ${videoLayout.stage_height};
+  const previewMargin = 24;
+
+  // 用外层壳体承接缩放后的物理尺寸，避免 transform 后布局尺寸仍按原始舞台计算而被 iframe 裁掉
+  function syncPreviewScale() {
+    const availableWidth = Math.max(window.innerWidth - previewMargin * 2, 320);
+    const availableHeight = Math.max(window.innerHeight - previewMargin * 2, 320);
+    const scale = Math.min(availableWidth / stageWidth, availableHeight / stageHeight, 1);
+    const scaledWidth = Math.max(1, Math.round(stageWidth * scale));
+    const scaledHeight = Math.max(1, Math.round(stageHeight * scale));
+
+    shell.style.width = scaledWidth + 'px';
+    shell.style.height = scaledHeight + 'px';
+    shell.style.margin = previewMargin + 'px auto';
+    stage.style.left = '0';
+    stage.style.top = '0';
+    stage.style.transformOrigin = 'top left';
+    stage.style.transform = 'scale(' + scale + ')';
+    document.body.style.minHeight = Math.max(window.innerHeight, scaledHeight + previewMargin * 2) + 'px';
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', syncPreviewScale, { once: true });
+  } else {
+    syncPreviewScale();
+  }
+
+  window.addEventListener('resize', syncPreviewScale, { passive: true });
+})();
+</script>
+`.trim();
+
+  let normalizedHtml = stripPreviewRuntimeConflicts(htmlContent);
+  if (normalizedHtml.includes('</head>')) {
+    normalizedHtml = normalizedHtml.replace('</head>', `${previewRuntimeStyle}\n</head>`);
+  } else {
+    normalizedHtml = `${previewRuntimeStyle}\n${normalizedHtml}`;
+  }
+
+  if (normalizedHtml.includes('</body>')) {
+    normalizedHtml = normalizedHtml.replace('</body>', `${previewRuntimeScript}\n</body>`);
+  } else {
+    normalizedHtml = `${normalizedHtml}\n${previewRuntimeScript}`;
+  }
+
+  console.log('[AI Generator] 已注入稳定预览缩放运行时，确保 HTML 在窄窗口与 iframe 中可见。');
+  return normalizedHtml;
 }
 
 /**
@@ -174,8 +288,15 @@ export async function generateInteractiveDemoByOutline(outlines, voice = 'zh-CN-
   if (!fs.existsSync(promptPath)) {
     throw new Error(`Missing interactive HTML prompt file at: ${promptPath}`);
   }
+  const videoLayout = getVideoLayoutConfig();
   let systemPrompt = fs.readFileSync(promptPath, 'utf-8').trim();
-  systemPrompt = systemPrompt.replace('${voice}', voice); // 动态注入配音发音人
+  systemPrompt = systemPrompt
+    .replaceAll('${voice}', voice)
+    .replaceAll('${stageWidth}', String(videoLayout.stage_width))
+    .replaceAll('${stageHeight}', String(videoLayout.stage_height))
+    .replaceAll('${aspectRatio}', String(videoLayout.aspect_ratio))
+    .replaceAll('${safePaddingX}', String(videoLayout.safe_padding_x))
+    .replaceAll('${safePaddingY}', String(videoLayout.safe_padding_y)); // 动态注入画幅与安全区约束
 
   const userPrompt = `【已微调的页面主题列表】\n${JSON.stringify(outlines, null, 2)}\n\n请以此大纲为基础，生成完整的、带自动配音旁白和精美 SVG 动画的交互式分镜 HTML 文件。`;
 
@@ -350,6 +471,9 @@ export async function generateInteractiveDemoByOutline(outlines, voice = 'zh-CN-
       showScene(currentIndex - 1);
     }
   });
+
+  const initialActiveIndex = Array.from(scenes).findIndex((scene) => scene.classList.contains('active'));
+  showScene(initialActiveIndex >= 0 ? initialActiveIndex : 0);
 })();
 </script>
 `;
@@ -359,6 +483,9 @@ export async function generateInteractiveDemoByOutline(outlines, voice = 'zh-CN-
   } else {
     htmlContent = htmlContent.trim() + `\n${pageControlScript}\n</body>\n</html>`;
   }
+
+  // 对大模型产物做最后一层预览壳修正，保证独立打开和前端 iframe 预览都稳定可见
+  htmlContent = injectPreviewRuntime(htmlContent, videoLayout);
 
   // 保存到 workspace
   const workspaceDir = path.resolve(topicWorkspace);

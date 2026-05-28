@@ -22,3 +22,8 @@ hyperframes-native/*/
 *.log
 .DS_Store
 Thumbs.db
+
+# 7. 临时草稿与开发缓存
+scratch/
+.playwright-mcp/
+

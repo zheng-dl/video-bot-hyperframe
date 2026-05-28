@@ -127,6 +127,14 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // 恢复按钮正常可点击状态，移除 loading
+  function stopButtonsLoading() {
+    btnExecuteHtml.disabled = false;
+    btnExecuteAll.disabled = false;
+    btnExecuteHtml.classList.remove("loading");
+    btnExecuteAll.classList.remove("loading");
+  }
+
   // 后台异常中断或失败应急响应函数，实现无魔法值卡片全线置红
   function handlePipelineFailure() {
     statusDot.className = "status-dot error";
@@ -138,6 +146,8 @@ document.addEventListener("DOMContentLoaded", () => {
         setStageState(stage, "error", "执行中断/失败");
       }
     });
+
+    stopButtonsLoading();
   }
 
   // Load dynamic LLM models matrix
@@ -264,6 +274,7 @@ document.addEventListener("DOMContentLoaded", () => {
           setStageState("upload", "success", "最终发布成功");
           statusDot.className = "status-dot";
           statusText.textContent = "控制后台运行正常";
+          stopButtonsLoading();
         }
         // Handle skip-render bypass matching，精准匹配真正跳过渲染时的唯一日志，规避“免渲染测试: 否”引发的前端状态误判
         if (log.includes("已应用 --skip-render 开关") || log.includes("跳过耗时的浏览器视频渲染。")) {
@@ -271,6 +282,7 @@ document.addEventListener("DOMContentLoaded", () => {
           setStageState("upload", "success", "已跳过 (免渲染测试)");
           statusDot.className = "status-dot";
           statusText.textContent = "控制后台运行正常";
+          stopButtonsLoading();
         }
         
         // 捕获各种致命和通用报错，执行卡片全置红与警报应急处理，杜绝无限转圈卡死
@@ -411,6 +423,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     btnExecuteHtml.disabled = true;
     btnExecuteAll.disabled = true;
+
+    // 根据是“仅生成”还是“确认大纲”按钮被点击，对应加上 loading 状态类
+    if (skipRender) {
+      btnExecuteHtml.classList.add("loading");
+    } else {
+      btnExecuteAll.classList.add("loading");
+    }
+
     resetAllStages();
     
     switchTab("tab-btn-channel");
@@ -438,14 +458,13 @@ document.addEventListener("DOMContentLoaded", () => {
       if (data.error) {
         addLog(`[Client API ERR] ${data.error}`, "err");
         alert(data.error);
+        stopButtonsLoading();
       } else {
         addLog(`[Client] 管道流程任务已派生启动！请实时关注下方 SSE 控制台。`, "sys");
       }
     } catch (err) {
       addLog(`[Network Error] ${err.message}`, "err");
-    } finally {
-      btnExecuteHtml.disabled = false;
-      btnExecuteAll.disabled = false;
+      stopButtonsLoading();
     }
   }
 

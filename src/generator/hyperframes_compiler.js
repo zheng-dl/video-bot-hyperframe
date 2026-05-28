@@ -1,266 +1,298 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import fs from 'fs';
 import path from 'path';
+import * as cheerio from 'cheerio';
+import { getVideoLayoutConfig } from '../utils/system_config.js';
 
 /**
- * 内部读取全局 system_config.json，获取对应的 API Key 与模型信息
+ * 编译器核心配置常量，彻底规避魔法值与硬编码
  */
-function getProviderConfig(provider = 'gemini') {
-  const configPath = path.resolve('./config/system_config.json');
-  if (!fs.existsSync(configPath)) {
-    throw new Error(`Missing system config file at: ${configPath}`);
+const COMPILER_CONFIG = {
+  COMPOSITION_ID: 'main',
+  DEFAULT_SCENE_DURATION: 3.0,
+  DURATION_BUFFER: 0.3,
+  TAIL_BUFFER: 1.0,
+  GSAP_CDN: 'https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js',
+  DEFAULT_SCENE_ID_PREFIX: 'scene-'
+};
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function appendClassName(existingClassName = '', className) {
+  const classNames = new Set(String(existingClassName).split(/\s+/).filter(Boolean));
+  classNames.add(className);
+  return Array.from(classNames).join(' ');
+}
+
+function isPreviewRuntimeScript(scriptContent = '') {
+  return (
+    scriptContent.includes('function fitShell') ||
+    scriptContent.includes('const shell = document.querySelector(\'.preview-shell\')') ||
+    scriptContent.includes('const shell = document.getElementById(\'previewShell\')') ||
+    scriptContent.includes('syncPreviewScale') ||
+    scriptContent.includes('showScene')
+  );
+}
+
+function cleanupNativeOnlyPreviewArtifacts($) {
+  $('style#hf-preview-runtime-style').remove();
+  $('script#hf-preview-runtime-script').remove();
+  $('script').each((_, script) => {
+    const content = $(script).html() || '';
+    if (content.includes('window.__timelines') || isPreviewRuntimeScript(content)) {
+      $(script).remove();
+    }
+  });
+}
+
+function remapStageSelectorStyles($, sourceSelector, targetSelector) {
+  if (!sourceSelector || sourceSelector === targetSelector) {
+    return;
   }
 
-  const systemConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  const config = systemConfig.LLM_PROVIDERS[provider];
-  if (!config) {
-    throw new Error(`Unsupported LLM provider: ${provider}`);
-  }
-
-  let apiKey = "";
-  if (provider === 'gemini') {
-    apiKey = process.env.GEMINI_API_KEY;
-  } else if (provider === 'deepseek') {
-    apiKey = process.env.DEEPSEEK_API_KEY;
-  } else if (provider === 'gpt') {
-    apiKey = process.env.GPT_API_KEY;
-  }
-
-  // 兜底策略
-  if (!apiKey || apiKey.trim() === "") {
-    apiKey = config.api_key && !config.api_key.includes("YOUR_") ? config.api_key : process.env.API_KEY;
-  }
-
-  if (!apiKey || apiKey.trim() === "" || apiKey.includes("HERE") || apiKey.includes("KEY")) {
-    throw new Error(`您尚未在 .env 或 system_config.json 中配置 ${provider} 的真实 API_KEY。`);
-  }
-
-  return {
-    name: config.name,
-    model: config.model,
-    api_url: config.api_url,
-    api_key: apiKey
-  };
+  const selectorPattern = new RegExp(escapeRegExp(sourceSelector), 'g');
+  $('style').each((_, styleEl) => {
+    const styleContent = $(styleEl).html() || '';
+    if (!styleContent.includes(sourceSelector)) {
+      return;
+    }
+    $(styleEl).html(styleContent.replace(selectorPattern, targetSelector));
+  });
 }
 
 /**
- * 兼容 OpenAI / DeepSeek 的接口请求封装，支持自动捕捉截断并追问补全
+ * 本地确定性 HyperFrames 编译器 (Cheerio DOM 装配版)
+ * 完全杜绝大模型二次 HTML 编译所导致的截断、闭合残缺和拼装崩溃问题
  */
-async function callOpenAICompatible(provider, systemPrompt, userPrompt) {
-  const config = getProviderConfig(provider);
-  const url = `${config.api_url}/v1/chat/completions`;
-
-  console.log(`[HyperFrames Compiler] Requesting OpenAI-compatible completions: ${url} (Model: ${config.model})`);
-
-  const MAX_ATTEMPTS = 5;
-  const MAX_OUTPUT_TOKENS = 8192;
-
-  let messages = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userPrompt }
-  ];
-
-  let fullContent = "";
-  let shouldContinue = true;
-  let attempt = 0;
-
-  while (shouldContinue && attempt < MAX_ATTEMPTS) {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${config.api_key}`
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: messages,
-        temperature: 0.2, // 低温保障代码重构的严谨性
-        max_tokens: MAX_OUTPUT_TOKENS
-      })
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`${provider} API 响应错误(${response.status}): ${errText}`);
-    }
-
-    const resObj = await response.json();
-    const choice = resObj.choices?.[0];
-    const text = choice?.message?.content || "";
-    if (!text && fullContent === "") {
-      throw new Error(`${provider} 返回内容为空。`);
-    }
-
-    fullContent += text;
-    const finishReason = choice?.finish_reason;
-
-    if (finishReason === "length") {
-      console.log(`[HyperFrames Compiler] 检测到文本被截断 (finish_reason: length)。正在请求继续生成... (尝试 ${attempt + 1}/${MAX_ATTEMPTS})`);
-      messages.push({ role: "assistant", content: text });
-      messages.push({ role: "user", content: "由于输出长度限制，你刚才的回答被截断了。请紧接着你刚才输出的最后一行代码，继续生成后面的内容，不要重复前面的内容，也不要用 markdown 代码块包裹。" });
-      attempt++;
-    } else {
-      shouldContinue = false;
-    }
-  }
-
-  return fullContent;
-}
-
 export async function compileToHyperFrames(interactiveHtmlPath, durations, provider = 'gemini', topicHfDir = 'hyperframes-native') {
-  const interactiveHtml = fs.readFileSync(interactiveHtmlPath, 'utf-8');
+  console.log(`[HyperFrames Compiler] Starting deterministic Cheerio DOM compilation for: ${interactiveHtmlPath}`);
 
-  // 计算每幕的确切开始时间和持续时间
-  let timelineContext = '';
+  if (!fs.existsSync(interactiveHtmlPath)) {
+    throw new Error(`[HyperFrames Compiler ERR] Source HTML file not found: ${interactiveHtmlPath}`);
+  }
+
+  const interactiveHtml = fs.readFileSync(interactiveHtmlPath, 'utf-8');
+  const $ = cheerio.load(interactiveHtml);
+  const videoLayout = getVideoLayoutConfig();
+  const canvasWidth = videoLayout.stage_width;
+  const canvasHeight = videoLayout.stage_height;
+  const stageSelector = videoLayout.stage_selector || '#video-stage';
+  cleanupNativeOnlyPreviewArtifacts($);
+  remapStageSelectorStyles($, stageSelector, '#root');
+
+  // 1. 根据精确音频时长计算绝对时间线
   let currentStart = 0;
+  const clipTimeframes = [];
   for (let i = 0; i < durations.length; i++) {
-    // 增加一点余量让声音不会那么紧凑
-    const dur = parseFloat((durations[i] + 0.3).toFixed(2)); 
-    timelineContext += `场景 [${i}]: data-start="${currentStart.toFixed(2)}", data-duration="${dur}"\n`;
+    const dur = parseFloat((durations[i] + COMPILER_CONFIG.DURATION_BUFFER).toFixed(2)); 
+    clipTimeframes.push({
+      start: currentStart,
+      duration: dur
+    });
     currentStart += dur;
   }
-  const totalDuration = Math.ceil(currentStart + 1.0); // 留一点结尾
+  const totalDuration = Math.ceil(currentStart + COMPILER_CONFIG.TAIL_BUFFER);
+  console.log(`[HyperFrames Compiler] Calculated Timeline - Total Duration: ${totalDuration}s (Clips count: ${clipTimeframes.length})`);
 
-  // 从外部配置文件中动态加载提示词并注入变量，彻底解耦
-  const promptPath = path.resolve('./config/hyperframes_compile_prompt.txt');
-  if (!fs.existsSync(promptPath)) {
-    throw new Error(`Missing hyperframes compile prompt file at: ${promptPath}`);
+  // 2. 优先抽取固定视频舞台，彻底隔离外层响应式预览壳对最终成片的干扰
+  let $root = null;
+  const $stage = $(stageSelector).first();
+  if ($stage.length > 0) {
+    const stageHtml = $.html($stage);
+    $('body').html(stageHtml);
+    $root = $('body').children().first();
+    console.log(`[HyperFrames Compiler] Using configured video stage selector: ${stageSelector}`);
+  } else {
+    $root = $('#root');
+    if ($root.length === 0) {
+      $('body').wrapInner('<div id="root"></div>');
+      $root = $('#root');
+    }
+    console.log(`[HyperFrames Compiler] Video stage selector not found, falling back to body/root wrapping.`);
   }
-  let systemPrompt = fs.readFileSync(promptPath, 'utf-8').trim();
-  systemPrompt = systemPrompt.replace('${totalDuration}', totalDuration.toString()); // 动态替换总时长
-
-  const userPrompt = `【时间轴要求】\n${timelineContext}\n总时长: ${totalDuration}s\n\n【交互式HTML源码】\n${interactiveHtml}\n\n请将以上源码严格按照 HyperFrames 规范重构并返回最终 HTML。`;
-
-  const SCENE_REGEX = /<!--\s*=*\s*场景\s*\d+/g;
   
-  let hfHtml = "";
-  const MAX_ATTEMPTS = 5;
-  let attempt = 0;
-  let shouldContinue = true;
-  
-  let openaiMessages = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userPrompt }
-  ];
-  let geminiContents = [
-    { role: "user", parts: [{ text: userPrompt }] }
-  ];
+  $root.attr({
+    'id': 'root',
+    'data-composition-id': COMPILER_CONFIG.COMPOSITION_ID,
+    'data-start': '0',
+    'data-duration': totalDuration.toString(),
+    'data-width': canvasWidth.toString(),
+    'data-height': canvasHeight.toString()
+  });
+  // 3. 场景容器物理重洗与时间戳绑定 (采用父级追溯法，具有极强命名容错性并物理保留原始ID)
+  const narrationScripts = $('script.scene-narration');
+  if (narrationScripts.length > 0) {
+    console.log(`[HyperFrames Compiler] Using parent-tracing method to locate scene clips.`);
+    narrationScripts.each((index, el) => {
+      const $container = $(el).parent();
+      const timeframe = clipTimeframes[index] || { start: 0, duration: COMPILER_CONFIG.DEFAULT_SCENE_DURATION };
 
-  while (shouldContinue && attempt < MAX_ATTEMPTS) {
-    let currentResponse = "";
-    let finishReason = "";
+      // 物理保留第一阶段场景原始 ID，防止专属 CSS 样式选择器踩空
+      const originalId = $container.attr('id') || `${COMPILER_CONFIG.DEFAULT_SCENE_ID_PREFIX}${index + 1}`;
+      const originalClassName = $container.attr('class') || '';
 
-    if (provider === 'gemini') {
-      const config = getProviderConfig('gemini');
-      const genAI = new GoogleGenerativeAI(config.api_key);
-      console.log(`[HyperFrames Compiler] Sending to Gemini (Attempt ${attempt + 1}/${MAX_ATTEMPTS})...`);
-      
-      const model = genAI.getGenerativeModel({ 
-        model: config.model,
-        systemInstruction: systemPrompt 
-      });
+      $container.attr('class', appendClassName(originalClassName, 'clip'))
+                .attr('id', originalId)
+                .attr('data-track-index', '0')
+                .attr('data-start', timeframe.start.toFixed(2))
+                .attr('data-duration', timeframe.duration.toFixed(2));
+    });
+  } else {
+    console.log(`[HyperFrames Compiler] Falling back to class name selector for locating scene clips.`);
+    // 兼容可能遗漏口播标签 of 异常场景
+    const scenes = $('.scene, .page, .clip');
+    scenes.each((index, el) => {
+      const $el = $(el);
+      const timeframe = clipTimeframes[index] || { start: 0, duration: COMPILER_CONFIG.DEFAULT_SCENE_DURATION };
 
-      const response = await model.generateContent({
-        contents: geminiContents,
-        generationConfig: { temperature: 0.2 }
-      });
+      // 物理保留第一阶段场景原始 ID，防止专属 CSS 样式选择器踩空
+      const originalId = $el.attr('id') || `${COMPILER_CONFIG.DEFAULT_SCENE_ID_PREFIX}${index + 1}`;
+      const originalClassName = $el.attr('class') || '';
 
-      const candidate = response.response.candidates?.[0];
-      currentResponse = response.response.text();
-      const rawFinish = candidate?.finishReason;
-      finishReason = (rawFinish === 'MAX_TOKENS' || rawFinish === 'LENGTH') ? 'length' : 'stop';
-    } else {
-      const config = getProviderConfig(provider);
-      const url = `${config.api_url}/v1/chat/completions`;
-      console.log(`[HyperFrames Compiler] Sending to ${provider} completions (Attempt ${attempt + 1}/${MAX_ATTEMPTS})...`);
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${config.api_key}`
-        },
-        body: JSON.stringify({
-          model: config.model,
-          messages: openaiMessages,
-          temperature: 0.2,
-          max_tokens: 8192
-        })
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`${provider} API 响应错误(${response.status}): ${errText}`);
-      }
-
-      const resObj = await response.json();
-      const choice = resObj.choices?.[0];
-      currentResponse = choice?.message?.content || "";
-      finishReason = choice?.finish_reason || "stop";
-    }
-
-    if (!currentResponse) {
-      throw new Error(`AI 返回内容为空。`);
-    }
-
-    let cleanResponse = currentResponse.trim();
-    if (cleanResponse.startsWith('```')) {
-      const lines = cleanResponse.split('\n');
-      if (lines[0].startsWith('```')) lines.shift();
-      if (lines[lines.length - 1].startsWith('```')) lines.pop();
-      cleanResponse = lines.join('\n');
-    }
-
-    hfHtml += cleanResponse;
-
-    if (finishReason === "length") {
-      console.log(`[HyperFrames Compiler] 检测到生成截断。进行场景对齐裁剪...`);
-      
-      let match;
-      let lastSceneIndex = -1;
-      const r = new RegExp(SCENE_REGEX.source, 'g');
-      while ((match = r.exec(hfHtml)) !== null) {
-        lastSceneIndex = match.index;
-      }
-
-      if (lastSceneIndex !== -1) {
-        hfHtml = hfHtml.substring(0, lastSceneIndex);
-        console.log(`[HyperFrames Compiler] 已成功裁剪不完整场景部分。`);
-      }
-
-      const completedCount = (hfHtml.match(SCENE_REGEX) || []).length;
-      console.log(`[HyperFrames Compiler] 已完整编译 ${completedCount} 个场景。准备请求继续生成...`);
-
-      const nextSceneNum = completedCount + 1;
-      const continuePrompt = `由于输出长度限制，你刚才的编译回答被截断了。我们已经保留了前 ${completedCount} 个编译好的场景的 HTML。请从第 ${nextSceneNum} 个场景开始，紧接着编译剩余的场景并闭合 HTML，千万不要重复前面已经生成的场景，直接输出代码即可，不要用 markdown 代码块包裹。`;
-
-      if (provider === 'gemini') {
-        geminiContents.push({ role: 'model', parts: [{ text: currentResponse }] });
-        geminiContents.push({ role: 'user', parts: [{ text: continuePrompt }] });
-      } else {
-        openaiMessages.push({ role: "assistant", content: currentResponse });
-        openaiMessages.push({ role: "user", content: continuePrompt });
-      }
-
-      attempt++;
-    } else {
-      shouldContinue = false;
-    }
+      $el.attr('class', appendClassName(originalClassName, 'clip'))
+         .attr('id', originalId)
+         .attr('data-track-index', '0')
+         .attr('data-start', timeframe.start.toFixed(2))
+         .attr('data-duration', timeframe.duration.toFixed(2));
+    });
+  }
+  // 4. Viewport 元数据强制合规
+  if ($('meta[name="viewport"]').length === 0) {
+    $('head').prepend(`<meta name="viewport" content="width=${canvasWidth}, initial-scale=1">`);
+  } else {
+    $('meta[name="viewport"]').attr('content', `width=${canvasWidth}, initial-scale=1`);
   }
 
-  if (hfHtml.startsWith('```')) {
-    const lines = hfHtml.split('\n');
-    if (lines[0].startsWith('```')) lines.shift();
-    if (lines[lines.length - 1].startsWith('```')) lines.pop();
-    hfHtml = lines.join('\n');
+  // 5. 强制全局样式与防 seek 物理冲突过渡覆盖规则
+  const requiredStyles = `
+<style>
+  html, body {
+    width: ${canvasWidth}px;
+    height: ${canvasHeight}px;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+    background-color: #05060b;
   }
+  #root {
+    width: ${canvasWidth}px;
+    height: ${canvasHeight}px;
+    position: relative;
+    overflow: hidden;
+  }
+  #root > .clip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: ${canvasWidth}px;
+    height: ${canvasHeight}px;
+    display: none;
+    opacity: 0;
+    box-sizing: border-box;
+  }
+  /* 强制屏蔽所有可能与 GSAP 寻帧 Timeline 冲突的原生 CSS 过渡，物理上根除 seek 时抖动 */
+  .clip, .clip * {
+    transition: none !important;
+    animation: none !important;
+  }
+</style>
+`;
+  $('head').append(requiredStyles);
 
+  // 6. 清理老旧脚本，物理强注 GSAP CDN 库与反射匹配引擎
+  $('script[src*="gsap"]').remove();
+  $('script').each((i, script) => {
+    const content = $(script).html() || '';
+    if (content.includes('window.__timelines') || isPreviewRuntimeScript(content)) {
+      $(script).remove();
+    }
+  });
+
+  const engineScript = `
+<!-- 必须手动显式引入 GSAP 核心库，防止静态分析器漏包导致 gsap is not defined 崩溃 -->
+<script src="${COMPILER_CONFIG.GSAP_CDN}"></script>
+<script>
+(function () {
+  var stageWidth = ${canvasWidth};
+  var stageHeight = ${canvasHeight};
+
+  // 1. 自动重置所有 .clip 场景的位置和透明度
+  gsap.set('#root > .clip', { display: 'none', opacity: 0 });
+
+  // 2. 初始化暂停的 GSAP Timeline
+  var tl = gsap.timeline({ paused: true });
+
+  // 3. 遍历所有直接子场景 .clip 并全自动匹配时间轴与错落动效
+  var clips = document.querySelectorAll('#root > .clip');
+  clips.forEach(function (clip) {
+    var startTime = parseFloat(clip.getAttribute('data-start'));
+    var duration = parseFloat(clip.getAttribute('data-duration'));
+    var endTime = startTime + duration;
+    var id = '#' + clip.id;
+
+    // A. 画面显隐全自动精确对齐口播时间轴（淡入 + 提前淡出 + 物理隐藏防残留）
+    tl.set(id, { display: 'flex', opacity: 0, visibility: 'visible' }, startTime)
+      .to(id, { opacity: 1, duration: 0.4 }, startTime)
+      .to(id, { opacity: 0, duration: 0.35, ease: 'power2.in' }, endTime - 0.35)
+      .set(id, { display: 'none', visibility: 'hidden' }, endTime);
+
+    // B. 子元素（标题、卡片、代码、SVG 模块）自动 Staggered 错落淡入
+    var animItems = clip.querySelectorAll('h1, h2, h3, p, .card, code, li, .diagram-box, .nest-system');
+    if (animItems.length > 0) {
+      tl.from(animItems, {
+        opacity: 0,
+        y: 35,
+        stagger: 0.12,
+        duration: 0.7,
+        ease: 'power2.out'
+      }, startTime + 0.15);
+    }
+  });
+
+  // 4. 对象格式挂载注册（致命硬性要求，秒级兼容渲染器）
+  window.__timelines = window.__timelines || {};
+  window.__timelines["${COMPILER_CONFIG.COMPOSITION_ID}"] = tl;
+
+  // 5. 浏览器本地预览自适应缩放与空格暂停播放逻辑
+  if (!window.__hyperframes) {
+    function fitToViewport() {
+      var scale = Math.min(window.innerWidth / stageWidth, window.innerHeight / stageHeight, 1);
+      document.body.style.transform = 'scale(' + scale + ')';
+      document.body.style.transformOrigin = 'top left';
+      var offsetX = (window.innerWidth - stageWidth * scale) / 2;
+      var offsetY = (window.innerHeight - stageHeight * scale) / 2;
+      document.body.style.marginLeft = Math.max(0, offsetX) + 'px';
+      document.body.style.marginTop = Math.max(0, offsetY) + 'px';
+    }
+    fitToViewport();
+    window.addEventListener('resize', fitToViewport);
+    document.addEventListener('click', function() {
+      if (tl.progress() >= 1) tl.restart(); else tl.play();
+    });
+    document.addEventListener('keydown', function(e) {
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (tl.isActive()) tl.pause();
+        else if (tl.progress() >= 1) tl.restart();
+        else tl.play();
+      }
+    });
+  }
+})();
+</script>
+`;
+
+  $('body').append(engineScript);
+
+  // 7. 物理保存合规文件并输出
+  const hfHtml = $.html();
   const outDir = path.resolve(topicHfDir);
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
   
   const outputPath = path.join(outDir, 'index.html');
   fs.writeFileSync(outputPath, hfHtml, 'utf-8');
-  console.log(`[HyperFrames Compiler] HyperFrames HTML successfully compiled at ${outputPath}`);
+  console.log(`[HyperFrames Compiler] (Deterministic Cheerio Engine) HyperFrames HTML successfully compiled at: ${outputPath}`);
   
   return outputPath;
 }

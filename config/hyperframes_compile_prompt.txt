@@ -30,6 +30,8 @@
    - 所有的场景切换、显隐、淡入淡出以及子元素错落入场，必须完全依赖我们提供的通用闭包脚本自动解析。
    - 大模型唯一要做的是：在生成的 HTML 底部（紧贴着 </body> 之前），**原封不动、一字不差地直接注入以下【全自动时间轴反射匹配引擎】脚本**（不得做任何修改）：
 
+<!-- 必须手动显式引入 GSAP 核心库，防止静态分析器漏包导致 gsap is not defined 崩溃 -->
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <script>
 (function () {
   // 1. 自动重置所有 .clip 场景的位置和透明度
@@ -106,6 +108,12 @@
    - **动画防抖**：在 HyperFrames 源文件中，**严禁使用任何 CSS transition，所有动画效果必须完全由 GSAP Timeline 承载！** 否则 CSS 过渡会与 GSAP seek 时刻发生严重的物理冲突和抖动！
    - **字幕居中定位**：字幕或卡片如需水平居中，**必须使用 CSS 的 transform: translateX(-50%) 进行偏移！严禁在 GSAP 动画中使用 xPercent: -50**，这会导致 headless 渲染时出现字幕严重偏右或偏移不在中间的 Bug。
    - 元素超出视口：多内容场景加 overflow-y: auto 或适当压缩 gap 间距，代码块必须使用 white-space: pre 保证等宽缩进。
+
+8. 响应式预览与最终成片分层规则：
+   - 如果源码中存在 .preview-shell 与 #video-stage 双层结构，最终编译时必须以 #video-stage 作为视频主舞台来源。
+   - .preview-shell 仅承担浏览器预览的响应式缩放与居中职责，不属于最终视频布局根节点。
+   - 最终 composition 的 data-width、data-height、viewport 与缩放逻辑都必须来自视频舞台配置，而不是浏览器窗口的原始布局。
+   - 严禁把外层网页壳的 max-width、响应式边距或断点重排规则带入最终视频舞台。
 
 【输出约束】
 直接输出完整规范的 HTML 代码，严禁使用 markdown 代码块 (```html) 包裹返回。

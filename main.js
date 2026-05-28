@@ -77,6 +77,7 @@ async function main() {
   const publishMode = parsed.publishMode || "draft";
   const collectionName = parsed.collectionName || "";
   const voice = parsed.voice || "zh-CN-YunxiNeural";
+  const speed = parsed.speed || "5";
   const skipRender = parsed.skipRender || false;
   const provider = parsed.provider || "gemini";
   const resume = parsed.resume || false;
@@ -96,7 +97,7 @@ async function main() {
   console.log(`[Main] 主题工作目录: ${topicWorkspace}`);
   console.log(`[Main] 大纲页数: ${outlines.length} 页`);
   console.log(`[Main] 创作大脑: ${provider}`);
-  console.log(`[Main] 口播配置: 音色=${voice}, 发布模式=${publishMode}, 合集=${collectionName || '无'}`);
+  console.log(`[Main] 口播配置: 音色=${voice}, 语速=${speed}, 发布模式=${publishMode}, 合集=${collectionName || '无'}`);
   console.log(`[Main] 跳过渲染 (免渲染测试): ${skipRender ? "是" : "否"}`);
   console.log(`[Main] 启用断点续作复用缓存: ${resume ? "是" : "否"}`);
   console.log(`==========================================\n`);
@@ -122,13 +123,32 @@ async function main() {
     const audioMetaPath = path.join(topicWorkspace, 'audio_meta.json');
     let audioResult = null;
 
-    if (resume && fs.existsSync(cachedMasterAudio) && fs.existsSync(audioMetaPath)) {
+    const canReuseAudioCache = (() => {
+      if (!resume || !fs.existsSync(cachedMasterAudio) || !fs.existsSync(audioMetaPath)) {
+        return false;
+      }
+
+      try {
+        const cachedAudioMeta = JSON.parse(fs.readFileSync(audioMetaPath, 'utf-8'));
+        if (String(cachedAudioMeta.tts_speed) !== String(speed)) {
+          console.log(`[Main] 检测到口播语速已变更（缓存=${cachedAudioMeta.tts_speed || '未知'}，当前=${speed}），放弃复用旧音频缓存。`);
+          return false;
+        }
+
+        audioResult = cachedAudioMeta;
+        return true;
+      } catch (e) {
+        console.warn(`[Main] 读取音频缓存元数据失败，改为重新生成 TTS: ${e.message}`);
+        return false;
+      }
+    })();
+
+    if (canReuseAudioCache) {
       console.log(`\n--- [断点复用] 步骤 2: 发现已存在的主音频与时长缓存，跳过 TTS 生成 ---`);
       console.log(`[Main] 已复用音频文件: ${cachedMasterAudio}`);
-      audioResult = JSON.parse(fs.readFileSync(audioMetaPath, 'utf-8'));
     } else {
       console.log(`\n--- 步骤 2: 生成配音并测量精确时长 ---`);
-      audioResult = await processAudio(interactiveHtmlPath, topicWorkspace);
+      audioResult = await processAudio(interactiveHtmlPath, topicWorkspace, speed);
       // 写入轻量级元数据缓存以便断点续作复用
       fs.writeFileSync(audioMetaPath, JSON.stringify(audioResult, null, 2), 'utf-8');
       console.log(`[Main] 音频处理完毕. 新的音频与元数据已成功缓存。`);
