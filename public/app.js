@@ -57,8 +57,38 @@ document.addEventListener("DOMContentLoaded", () => {
     tab.btn.addEventListener("click", () => switchTab(tab.btn.id));
   });
 
+  // 零魔法值与零硬编码，进度条原地单行刷新记录器
+  let lastProgressLineEl = null;
+
   // Log functions
   function addLog(text, type = "") {
+    // 智能识别高频刷屏进度行（渲染帧、编码、拼装等）
+    const isProgress = text.includes("Capturing frame") || 
+                       text.includes("Encoding video") || 
+                       text.includes("Assembling final video") ||
+                       text.includes("██████");
+
+    if (isProgress) {
+      // 过滤掉转义字符 [2K，保持控制台文字纯净
+      const cleanText = text.replace(/\[2K/g, "").trim();
+      const logText = `[${new Date().toLocaleTimeString()}] ${cleanText}`;
+      
+      // 如果存在之前的进度条行且未被清空，则原地覆盖其内容，实现单行刷新
+      if (lastProgressLineEl && lastProgressLineEl.parentNode === terminalLogBody) {
+        lastProgressLineEl.textContent = logText;
+      } else {
+        const line = document.createElement("div");
+        line.className = `terminal-line progress-line ${type}`;
+        line.textContent = logText;
+        terminalLogBody.appendChild(line);
+        lastProgressLineEl = line;
+      }
+      terminalLogBody.scrollTop = terminalLogBody.scrollHeight;
+      return;
+    }
+
+    // 其它常规日志，断开进度条关联，正常追加新行
+    lastProgressLineEl = null;
     const line = document.createElement("div");
     line.className = `terminal-line ${type}`;
     line.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
@@ -67,6 +97,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   btnClearLogs.addEventListener("click", () => {
+    lastProgressLineEl = null; // 清空时同步重置进度条记录
     terminalLogBody.innerHTML = '<div class="terminal-line system-msg">[系统] 日志已清空。</div>';
   });
 
