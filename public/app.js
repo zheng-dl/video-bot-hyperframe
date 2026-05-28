@@ -234,8 +234,8 @@ document.addEventListener("DOMContentLoaded", () => {
           statusDot.className = "status-dot";
           statusText.textContent = "控制后台运行正常";
         }
-        // Handle skip-render bypass matching
-        if (log.includes("免渲染测试") || log.includes("跳过耗时的浏览器视频渲染")) {
+        // Handle skip-render bypass matching，精准匹配真正跳过渲染时的唯一日志，规避“免渲染测试: 否”引发的前端状态误判
+        if (log.includes("已应用 --skip-render 开关") || log.includes("跳过耗时的浏览器视频渲染。")) {
           setStageState("render", "success", "已跳过 (免渲染测试)");
           setStageState("upload", "success", "已跳过 (免渲染测试)");
           statusDot.className = "status-dot";
